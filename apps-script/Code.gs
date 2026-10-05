@@ -30,7 +30,7 @@ const AUTO_ADDED_USER_COLUMNS = ['passwordHistory'];
 const SETTING_KEYS = ['url', 'module', 'idField', 'timeoutMinutes'];
 
 const HASH_ROUNDS = 1000;
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH = 4;
 const PASSWORD_HISTORY_SIZE = 3; // a new password can't match any of the last 3 (current one included)
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // a sign-in stays valid for 12 hours
 const MAX_FAILED_LOGINS = 5;
@@ -381,24 +381,7 @@ function hashPassword_(password, salt) {
 function passwordProblems_(password) {
   const problems = [];
   if (password.length < MIN_PASSWORD_LENGTH) problems.push('at least ' + MIN_PASSWORD_LENGTH + ' characters');
-  if (!/[A-Z]/.test(password)) problems.push('an uppercase letter');
-  if (!/[a-z]/.test(password)) problems.push('a lowercase letter');
-  if (!/[0-9]/.test(password)) problems.push('a number');
-  if (!/[^A-Za-z0-9]/.test(password)) problems.push('a special character');
-  if (/(.)\1\1/.test(password)) problems.push('no character repeated 3 or more times in a row (like "111" or "aaa")');
-  if (hasSequentialRun_(password)) problems.push('no 3 or more sequential characters (like "123", "abc" or "321")');
   return problems;
-}
-
-/* True if 3+ consecutive digits or letters run up or down by one: 123, 987, abc, CBA. */
-function hasSequentialRun_(password) {
-  const s = password.toLowerCase();
-  for (let i = 0; i + 2 < s.length; i += 1) {
-    if (!/^(?:[0-9]{3}|[a-z]{3})$/.test(s.substr(i, 3))) continue;
-    const step = s.charCodeAt(i + 1) - s.charCodeAt(i);
-    if (Math.abs(step) === 1 && s.charCodeAt(i + 2) - s.charCodeAt(i + 1) === step) return true;
-  }
-  return false;
 }
 
 /* The user's last PASSWORD_HISTORY_SIZE passwords as [{ s: salt, h: hash }],

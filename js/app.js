@@ -385,25 +385,8 @@
    * ------------------------------------------------------------------- */
   const PASSWORD_HISTORY_SIZE = 3;
 
-  /* True if 3+ consecutive digits or letters run up or down by one: 123, 987, abc, CBA. */
-  function hasSequentialRun(password) {
-    const s = password.toLowerCase();
-    for (let i = 0; i + 2 < s.length; i += 1) {
-      if (!/^(?:[0-9]{3}|[a-z]{3})$/.test(s.substr(i, 3))) continue;
-      const step = s.charCodeAt(i + 1) - s.charCodeAt(i);
-      if (Math.abs(step) === 1 && s.charCodeAt(i + 2) - s.charCodeAt(i + 1) === step) return true;
-    }
-    return false;
-  }
-
   const PASSWORD_RULES = [
-    { label: "At least 8 characters", test: (p) => p.length >= 8 },
-    { label: "An uppercase letter (A–Z)", test: (p) => /[A-Z]/.test(p) },
-    { label: "A lowercase letter (a–z)", test: (p) => /[a-z]/.test(p) },
-    { label: "A number (0–9)", test: (p) => /[0-9]/.test(p) },
-    { label: "A special character (e.g. ! @ # $ %)", test: (p) => /[^A-Za-z0-9]/.test(p) },
-    { label: "No character repeated 3+ times in a row (e.g. 111, aaa)", test: (p) => p !== "" && !/(.)\1\1/.test(p) },
-    { label: "No 3+ sequential characters (e.g. 123, 987, abc)", test: (p) => p !== "" && !hasSequentialRun(p) },
+    { label: "At least 4 characters", test: (p) => p.length >= 4 },
   ];
 
   function passwordMeetsPolicy(password) {

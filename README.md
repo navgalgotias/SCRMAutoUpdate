@@ -36,9 +36,7 @@ No one — not even an Admin — sets another user's password directly. Instead:
 
 Every new password (first sign-in, Change Password, Forgot password) must have:
 
-- at least **8 characters**, with an **uppercase letter**, a **lowercase letter**, a **number** and a **special character**;
-- **no character repeated 3+ times in a row** (`111`, `aaa`);
-- **no 3+ sequential characters**, up or down, digits or letters (`123`, `987`, `abc`, `CBA`);
+- at least **4 characters**;
 - and it can't be **any of the user's last 3 passwords** (the current one included). An Admin reset keeps this history, so a reset can't be used to go back to an old password.
 
 The password fields show these rules as a live checklist. The Apps Script enforces them again on the server, so they can't be bypassed from the browser. Passwords set before these rules existed keep working until they're next changed.
