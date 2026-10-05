@@ -561,6 +561,18 @@
     toast._t = setTimeout(() => { els.toast.hidden = true; }, 4500);
   }
 
+  /* Close a modal when its dark backdrop is clicked — but only when the press
+   * also started on the backdrop. Otherwise selecting text in a field and
+   * releasing the mouse outside the dialog would close it mid-typing. */
+  function closeOnBackdropClick(overlay, close) {
+    let pressedOnBackdrop = false;
+    overlay.addEventListener("mousedown", (e) => { pressedOnBackdrop = e.target === overlay; });
+    overlay.addEventListener("click", (e) => {
+      if (pressedOnBackdrop && e.target === overlay) close();
+      pressedOnBackdrop = false;
+    });
+  }
+
   function setStep(stepNumber) {
     document.querySelectorAll(".step").forEach((el) => {
       const n = Number(el.dataset.step);
@@ -1110,9 +1122,7 @@
   els.btnForgotPassword.addEventListener("click", () => openPasswordModal("forgot"));
   els.btnPasswordClose.addEventListener("click", closePasswordModal);
   els.btnPasswordCancel.addEventListener("click", closePasswordModal);
-  els.passwordOverlay.addEventListener("click", (e) => {
-    if (e.target === els.passwordOverlay) closePasswordModal();
-  });
+  closeOnBackdropClick(els.passwordOverlay, closePasswordModal);
   els.pwNew.addEventListener("input", () => renderPasswordRules(els.pwRules, els.pwNew.value));
 
   els.passwordForm.addEventListener("submit", async (e) => {
@@ -1767,9 +1777,7 @@
 
   els.btnOpenSettings.addEventListener("click", openSettingsModal);
   els.btnSettingsClose.addEventListener("click", closeSettingsModal);
-  els.settingsOverlay.addEventListener("click", (e) => {
-    if (e.target === els.settingsOverlay) closeSettingsModal();
-  });
+  closeOnBackdropClick(els.settingsOverlay, closeSettingsModal);
 
   async function reconnectCurrentUser(crmConfig) {
     if (!state.auth) return;
@@ -2058,8 +2066,12 @@
     // text — that list now lives in the Google Sheet, so wipe the local copy.
     try { localStorage.removeItem(LEGACY_USERS_STORAGE_KEY); } catch (_e) { /* ignore */ }
 
+    // The login screen is visible from the first paint, so prepare it now —
+    // not after the Sheet calls below, which can take several seconds and
+    // would otherwise wipe whatever the user has typed in the meantime.
+    showLogin();
+
     if (!USER_API_URL) {
-      showLogin();
       setLoginStatus("Not configured", "solid-danger");
       toast("The user database isn't configured yet — set userApiUrl in js/config.js (see README).", "error");
       return;
@@ -2090,7 +2102,7 @@
       clearAuthSession();
       toast("Your session expired — please sign in again.", "error");
     }
-    showLogin();
+    // The login screen is already showing (see the top of init) — leave the form alone.
   })();
 })();
 
