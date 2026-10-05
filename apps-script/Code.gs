@@ -22,7 +22,9 @@
 const SPREADSHEET_ID = '1cq0ra2yQLwY3puqF68Sdhb4DZf7EzqnydbXDppwbCOg';
 const USERS_SHEET = 'Users';
 const SETTINGS_SHEET = 'Settings';
-const USER_COLUMNS = ['navneetk', 'Navneet', 'Kumar', 'Admin', 'xh2go2emiDYeNEt4', 'passwordHash', 'passwordSalt', 'passwordHistory', 'updatedAt'];
+// These are the COLUMN HEADER NAMES in row 1 of the Users tab — not user data.
+// Each user's details go in a row of the Sheet under these headers.
+const USER_COLUMNS = ['username', 'firstName', 'lastName', 'role', 'accessKey', 'passwordHash', 'passwordSalt', 'passwordHistory', 'updatedAt'];
 // Columns added after the first release — created automatically on an existing Users tab.
 const AUTO_ADDED_USER_COLUMNS = ['passwordHistory'];
 const SETTING_KEYS = ['url', 'module', 'idField', 'timeoutMinutes'];
