@@ -163,6 +163,24 @@
     profileUsername: $("profile-username"),
     profileRoleTag: $("profile-role-tag"),
     btnLogout: $("btn-logout"),
+    btnChangePassword: $("btn-change-password"),
+
+    passwordOverlay: $("password-overlay"),
+    passwordTitle: $("password-title"),
+    passwordIntro: $("password-intro"),
+    passwordForm: $("password-form"),
+    pwUsernameField: $("pw-username-field"),
+    pwUsername: $("pw-username"),
+    pwAccessKeyField: $("pw-accesskey-field"),
+    pwAccessKey: $("pw-accesskey"),
+    pwCurrentField: $("pw-current-field"),
+    pwCurrent: $("pw-current"),
+    pwNew: $("pw-new"),
+    pwRules: $("pw-rules"),
+    pwConfirm: $("pw-confirm"),
+    btnPasswordSave: $("btn-password-save"),
+    btnPasswordCancel: $("btn-password-cancel"),
+    btnPasswordClose: $("btn-password-close"),
 
     loginScreen: $("login-screen"),
     loginForm: $("login-form"),
@@ -173,6 +191,8 @@
     loginPasswordConfirmField: $("login-password-confirm-field"),
     loginPasswordConfirm: $("login-password-confirm"),
     loginFirstTimeHint: $("login-first-time-hint"),
+    loginPasswordRules: $("login-password-rules"),
+    btnForgotPassword: $("btn-forgot-password"),
     loginRememberToggle: $("login-remember-toggle"),
     loginCrmUrl: $("login-crm-url"),
     btnLogin: $("btn-login"),
@@ -359,6 +379,59 @@
   }
 
   /* ---------------------------------------------------------------------
+   * Password policy — shown as a live checklist wherever a password is
+   * chosen. The Apps Script enforces the same rules (passwordProblems_),
+   * plus "not one of your last 3 passwords", which only it can check.
+   * ------------------------------------------------------------------- */
+  const PASSWORD_HISTORY_SIZE = 3;
+
+  /* True if 3+ consecutive digits or letters run up or down by one: 123, 987, abc, CBA. */
+  function hasSequentialRun(password) {
+    const s = password.toLowerCase();
+    for (let i = 0; i + 2 < s.length; i += 1) {
+      if (!/^(?:[0-9]{3}|[a-z]{3})$/.test(s.substr(i, 3))) continue;
+      const step = s.charCodeAt(i + 1) - s.charCodeAt(i);
+      if (Math.abs(step) === 1 && s.charCodeAt(i + 2) - s.charCodeAt(i + 1) === step) return true;
+    }
+    return false;
+  }
+
+  const PASSWORD_RULES = [
+    { label: "At least 8 characters", test: (p) => p.length >= 8 },
+    { label: "An uppercase letter (A–Z)", test: (p) => /[A-Z]/.test(p) },
+    { label: "A lowercase letter (a–z)", test: (p) => /[a-z]/.test(p) },
+    { label: "A number (0–9)", test: (p) => /[0-9]/.test(p) },
+    { label: "A special character (e.g. ! @ # $ %)", test: (p) => /[^A-Za-z0-9]/.test(p) },
+    { label: "No character repeated 3+ times in a row (e.g. 111, aaa)", test: (p) => p !== "" && !/(.)\1\1/.test(p) },
+    { label: "No 3+ sequential characters (e.g. 123, 987, abc)", test: (p) => p !== "" && !hasSequentialRun(p) },
+  ];
+
+  function passwordMeetsPolicy(password) {
+    return PASSWORD_RULES.every((rule) => rule.test(password));
+  }
+
+  function renderPasswordRules(listEl, password) {
+    listEl.innerHTML = "";
+    PASSWORD_RULES.forEach((rule) => {
+      const met = rule.test(password);
+      const li = document.createElement("li");
+      li.className = met ? "is-met" : "";
+      const icon = document.createElement("iconify-icon");
+      icon.setAttribute("icon", met ? "ph:check-circle-fill" : "ph:circle");
+      li.appendChild(icon);
+      li.appendChild(document.createTextNode(rule.label));
+      listEl.appendChild(li);
+    });
+    const note = document.createElement("li");
+    note.className = "is-note";
+    const icon = document.createElement("iconify-icon");
+    icon.setAttribute("icon", "ph:clock-counter-clockwise");
+    note.appendChild(icon);
+    note.appendChild(document.createTextNode("Can't be one of your last " + PASSWORD_HISTORY_SIZE + " passwords"));
+    listEl.appendChild(note);
+  }
+
+  /* ---------------------------------------------------------------------
    * Login session (sessionStorage — cleared when the tab/browser closes,
    * so this behaves like a real "sign in each session" login screen).
    * Only the username and the Sheet's signed session token are stored; the
@@ -431,6 +504,7 @@
     els.appHeader.hidden = true;
     els.headerActions.hidden = true;
     els.appMain.hidden = true;
+    els.passwordOverlay.hidden = true;
     clearIdleTimer();
     resetLoginForm();
   }
@@ -837,7 +911,14 @@
     els.loginPassword.placeholder = isFirstTime ? "Choose a password" : "Enter your password";
     els.loginPasswordConfirmField.hidden = !isFirstTime;
     els.loginFirstTimeHint.hidden = !isFirstTime;
+    els.loginPasswordRules.hidden = !isFirstTime;
+    els.btnForgotPassword.hidden = isFirstTime;
+    if (isFirstTime) renderPasswordRules(els.loginPasswordRules, els.loginPassword.value);
   }
+
+  els.loginPassword.addEventListener("input", () => {
+    if (!els.loginPasswordRules.hidden) renderPasswordRules(els.loginPasswordRules, els.loginPassword.value);
+  });
 
   /* As soon as a username is typed, ask the Sheet whether it's a first-time
    * user (shape the password field(s) to match) and prefill a remembered password. */
@@ -908,8 +989,8 @@
     const password = els.loginPassword.value;
     const creating = !els.loginPasswordConfirmField.hidden;
     if (creating) {
-      if (!password || password.length < 4) {
-        toast("Choose a password with at least 4 characters.", "error");
+      if (!passwordMeetsPolicy(password)) {
+        toast("Your password doesn't meet all the rules listed under it yet.", "error");
         return;
       }
       if (password !== els.loginPasswordConfirm.value) {
@@ -986,6 +1067,110 @@
     state.session = null;
     showLogin();
     toast("Logged out.", "success");
+  });
+
+  /* ---------------------------------------------------------------------
+   * Password modal — two modes, both saved to the Google Sheet:
+   *   "change": signed-in user, from the profile menu. Needs the current password.
+   *   "forgot": from the login screen. The user proves it's their account with
+   *             their own vTiger access key instead of the old password.
+   * Either way the new password must pass PASSWORD_RULES, and the Sheet also
+   * rejects any of the user's last 3 passwords.
+   * ------------------------------------------------------------------- */
+  let passwordMode = "change";
+
+  function openPasswordModal(mode) {
+    passwordMode = mode;
+    const forgot = mode === "forgot";
+    els.passwordTitle.textContent = forgot ? "Reset Your Password" : "Change Password";
+    els.passwordIntro.textContent = forgot
+      ? "Enter your username and your vTiger access key to set a new password."
+      : "Enter your current password, then choose a new one.";
+    els.pwUsernameField.hidden = !forgot;
+    els.pwAccessKeyField.hidden = !forgot;
+    els.pwCurrentField.hidden = forgot;
+    els.btnPasswordSave.textContent = forgot ? "Reset Password" : "Update Password";
+
+    els.passwordForm.reset();
+    if (forgot) els.pwUsername.value = els.loginUsername.value.trim();
+    renderPasswordRules(els.pwRules, "");
+    els.passwordOverlay.hidden = false;
+    (forgot ? (els.pwUsername.value ? els.pwAccessKey : els.pwUsername) : els.pwCurrent).focus();
+  }
+
+  function closePasswordModal() {
+    els.passwordOverlay.hidden = true;
+    els.passwordForm.reset();
+  }
+
+  els.btnChangePassword.addEventListener("click", () => {
+    closeProfileDropdown();
+    openPasswordModal("change");
+  });
+  els.btnForgotPassword.addEventListener("click", () => openPasswordModal("forgot"));
+  els.btnPasswordClose.addEventListener("click", closePasswordModal);
+  els.btnPasswordCancel.addEventListener("click", closePasswordModal);
+  els.passwordOverlay.addEventListener("click", (e) => {
+    if (e.target === els.passwordOverlay) closePasswordModal();
+  });
+  els.pwNew.addEventListener("input", () => renderPasswordRules(els.pwRules, els.pwNew.value));
+
+  els.passwordForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const forgot = passwordMode === "forgot";
+    const username = forgot ? els.pwUsername.value.trim() : (state.auth && state.auth.username);
+    const newPassword = els.pwNew.value;
+
+    if (forgot && (!username || !els.pwAccessKey.value.trim())) {
+      toast("Enter your username and your vTiger access key.", "error");
+      return;
+    }
+    if (!forgot && !els.pwCurrent.value) {
+      toast("Enter your current password.", "error");
+      return;
+    }
+    if (!passwordMeetsPolicy(newPassword)) {
+      toast("Your new password doesn't meet all the rules listed under it yet.", "error");
+      return;
+    }
+    if (newPassword !== els.pwConfirm.value) {
+      toast("New passwords do not match.", "error");
+      return;
+    }
+
+    els.btnPasswordSave.disabled = true;
+    try {
+      if (forgot) {
+        await UserApi.call("resetOwnPassword", { username, accessKey: els.pwAccessKey.value.trim(), newPassword });
+      } else {
+        await UserApi.authed("changePassword", { currentPassword: els.pwCurrent.value, newPassword });
+      }
+    } catch (err) {
+      toast(err.message, "error");
+      return;
+    } finally {
+      els.btnPasswordSave.disabled = false;
+    }
+
+    // A remembered copy of the old password would no longer work: keep it in
+    // step for a signed-in change, drop it after a forgot-password reset.
+    if (getRememberedPassword(username)) {
+      if (forgot) clearRememberedPassword(username);
+      else setRememberedPassword(username, newPassword);
+    }
+    closePasswordModal();
+
+    if (forgot) {
+      els.loginUsername.value = username;
+      els.loginPassword.value = "";
+      els.loginPasswordConfirm.value = "";
+      showCreatePasswordFields(false);
+      setRememberToggle(false);
+      els.loginPassword.focus();
+      toast("Password reset. Sign in with your new password.", "success");
+    } else {
+      toast("Password changed.", "success");
+    }
   });
 
   /* ---------------------------------------------------------------------

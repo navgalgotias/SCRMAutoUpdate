@@ -22,11 +22,14 @@
 const SPREADSHEET_ID = '1cq0ra2yQLwY3puqF68Sdhb4DZf7EzqnydbXDppwbCOg';
 const USERS_SHEET = 'Users';
 const SETTINGS_SHEET = 'Settings';
-const USER_COLUMNS = ['username', 'firstName', 'lastName', 'role', 'accessKey', 'passwordHash', 'passwordSalt', 'updatedAt'];
+const USER_COLUMNS = ['username', 'firstName', 'lastName', 'role', 'accessKey', 'passwordHash', 'passwordSalt', 'passwordHistory', 'updatedAt'];
+// Columns added after the first release — created automatically on an existing Users tab.
+const AUTO_ADDED_USER_COLUMNS = ['passwordHistory'];
 const SETTING_KEYS = ['url', 'module', 'idField', 'timeoutMinutes'];
 
 const HASH_ROUNDS = 1000;
-const MIN_PASSWORD_LENGTH = 4;
+const MIN_PASSWORD_LENGTH = 8;
+const PASSWORD_HISTORY_SIZE = 3; // a new password can't match any of the last 3 (current one included)
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // a sign-in stays valid for 12 hours
 const MAX_FAILED_LOGINS = 5;
 const LOCKOUT_SECONDS = 15 * 60;
@@ -126,13 +129,7 @@ const ACTIONS = {
     let created = false;
     if (!user.passwordHash) {
       if (!body.create) throw error_('Create your password to finish signing in.', 'needs_password');
-      if (password.length < MIN_PASSWORD_LENGTH) {
-        throw error_('Choose a password with at least ' + MIN_PASSWORD_LENGTH + ' characters.', 'bad_request');
-      }
-      withLock_(() => {
-        const salt = Utilities.getUuid();
-        writeUser_(user.row, { passwordHash: hashPassword_(password, salt), passwordSalt: salt });
-      });
+      withLock_(() => setPassword_(findUser_(key), password));
       created = true;
     } else if (hashPassword_(password, user.passwordSalt) !== user.passwordHash) {
       recordFailure_(key);
@@ -141,6 +138,39 @@ const ACTIONS = {
 
     clearFailures_(key);
     return { token: issueToken_(user.username), user: publicUser_(user, true), created: created };
+  },
+
+  /* Signed in: change your own password. Needs the current one; the new one
+   * must pass the password policy and not be one of the last 3. */
+  changePassword(body) {
+    const user = requireUser_(body.token);
+    const key = normalizeUsername_(user.username);
+    assertNotLocked_(key);
+    if (!user.passwordHash || hashPassword_(String(body.currentPassword || ''), user.passwordSalt) !== user.passwordHash) {
+      recordFailure_(key);
+      throw error_('Your current password is incorrect.', 'bad_password');
+    }
+    withLock_(() => setPassword_(findUser_(key), String(body.newPassword || '')));
+    clearFailures_(key);
+    return {};
+  },
+
+  /* Public: "Forgot password?" — the user proves who they are with their own
+   * vTiger access key (only they and Admins have it) and sets a new password.
+   * Wrong keys count toward the same lockout as wrong passwords. */
+  resetOwnPassword(body) {
+    const key = normalizeUsername_(body.username);
+    if (!key) throw error_('Please enter your username.', 'bad_request');
+    assertNotLocked_(key);
+    const user = findUser_(key);
+    const accessKey = String(body.accessKey || '').trim();
+    if (!user || !user.accessKey || accessKey !== user.accessKey) {
+      recordFailure_(key);
+      throw error_('That username and vTiger access key don\'t match.', 'bad_access_key');
+    }
+    withLock_(() => setPassword_(findUser_(key), String(body.newPassword || '')));
+    clearFailures_(key);
+    return {};
   },
 
   /* Signed in: the caller's own fresh record (role/name/access key) — used on
@@ -186,13 +216,14 @@ const ACTIONS = {
     });
   },
 
-  /* Admin: clear a user's password so they create a new one at next sign-in. */
+  /* Admin: clear a user's password so they create a new one at next sign-in.
+   * The history is kept, so they still can't go back to a recent password. */
   resetPassword(body) {
     requireAdmin_(body.token);
     return withLock_(() => {
       const user = findUser_(body.username);
       if (!user) throw error_('That user no longer exists.', 'not_found');
-      writeUser_(user.row, { passwordHash: '', passwordSalt: '' });
+      writeUser_(user.row, { passwordHash: '', passwordSalt: '', passwordHistory: JSON.stringify(passwordHistory_(user)) });
       clearFailures_(normalizeUsername_(user.username));
       return {};
     });
@@ -251,7 +282,12 @@ function userColumnIndex_(sheet) {
   const headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0].map((h) => String(h).trim());
   const index = {};
   USER_COLUMNS.forEach((c) => {
-    const i = headers.indexOf(c);
+    let i = headers.indexOf(c);
+    if (i < 0 && AUTO_ADDED_USER_COLUMNS.indexOf(c) >= 0) {
+      i = headers.length;
+      sheet.getRange(1, i + 1).setValue(c);
+      headers.push(c);
+    }
     if (i < 0) throw error_('The "' + USERS_SHEET + '" tab is missing the "' + c + '" column.', 'misconfigured');
     index[c] = i;
   });
@@ -334,6 +370,66 @@ function hashPassword_(password, salt) {
     digest = Utilities.computeHmacSha256Signature(digest, pepper);
   }
   return Utilities.base64Encode(digest);
+}
+
+/* ---------------------------------------------------------------------
+ * Password policy — mirrored in js/app.js (PASSWORD_RULES) for the live
+ * checklist, but this is the copy that's actually enforced.
+ * ------------------------------------------------------------------- */
+function passwordProblems_(password) {
+  const problems = [];
+  if (password.length < MIN_PASSWORD_LENGTH) problems.push('at least ' + MIN_PASSWORD_LENGTH + ' characters');
+  if (!/[A-Z]/.test(password)) problems.push('an uppercase letter');
+  if (!/[a-z]/.test(password)) problems.push('a lowercase letter');
+  if (!/[0-9]/.test(password)) problems.push('a number');
+  if (!/[^A-Za-z0-9]/.test(password)) problems.push('a special character');
+  if (/(.)\1\1/.test(password)) problems.push('no character repeated 3 or more times in a row (like "111" or "aaa")');
+  if (hasSequentialRun_(password)) problems.push('no 3 or more sequential characters (like "123", "abc" or "321")');
+  return problems;
+}
+
+/* True if 3+ consecutive digits or letters run up or down by one: 123, 987, abc, CBA. */
+function hasSequentialRun_(password) {
+  const s = password.toLowerCase();
+  for (let i = 0; i + 2 < s.length; i += 1) {
+    if (!/^(?:[0-9]{3}|[a-z]{3})$/.test(s.substr(i, 3))) continue;
+    const step = s.charCodeAt(i + 1) - s.charCodeAt(i);
+    if (Math.abs(step) === 1 && s.charCodeAt(i + 2) - s.charCodeAt(i + 1) === step) return true;
+  }
+  return false;
+}
+
+/* The user's last PASSWORD_HISTORY_SIZE passwords as [{ s: salt, h: hash }],
+ * newest first, including the current one. */
+function passwordHistory_(user) {
+  let list = [];
+  try { list = JSON.parse(user.passwordHistory || '[]'); } catch (_err) { /* treat as empty */ }
+  if (!Array.isArray(list)) list = [];
+  // Rows created before history existed only have the current hash.
+  if (user.passwordHash && !list.some((e) => e && e.h === user.passwordHash)) {
+    list.unshift({ s: user.passwordSalt, h: user.passwordHash });
+  }
+  return list.filter((e) => e && e.s && e.h).slice(0, PASSWORD_HISTORY_SIZE);
+}
+
+/* Validates and stores a new password for `user`. Call inside withLock_. */
+function setPassword_(user, password) {
+  if (!user) throw error_('That user no longer exists.', 'not_found');
+  const problems = passwordProblems_(password);
+  if (problems.length) throw error_('Your password needs ' + problems.join(', ') + '.', 'weak_password');
+
+  const history = passwordHistory_(user);
+  if (history.some((e) => hashPassword_(password, e.s) === e.h)) {
+    throw error_('You can\'t reuse any of your last ' + PASSWORD_HISTORY_SIZE + ' passwords. Choose a new one.', 'password_reused');
+  }
+
+  const salt = Utilities.getUuid();
+  const hash = hashPassword_(password, salt);
+  writeUser_(user.row, {
+    passwordHash: hash,
+    passwordSalt: salt,
+    passwordHistory: JSON.stringify([{ s: salt, h: hash }].concat(history).slice(0, PASSWORD_HISTORY_SIZE)),
+  });
 }
 
 /* Token = base64(payload) + "." + HMAC signature. It only carries the username

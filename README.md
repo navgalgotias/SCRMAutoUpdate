@@ -27,8 +27,21 @@ No one — not even an Admin — sets another user's password directly. Instead:
 1. An Admin adds a user (in **Settings → Users**, or by typing a row straight into the Sheet's **Users** tab) with just a username, name, vTiger access key, and role — no password.
 2. The first time that person signs in, a **Confirm Password** field appears as soon as they leave the username field (the Sheet reports they have no password yet). Whatever they enter becomes their password.
 3. Every sign-in after that asks for that same username + password. A wrong password is rejected by the Sheet before the app ever touches vTiger, and **5 wrong attempts lock that username for 15 minutes**.
-4. If someone forgets their password, an **Admin** can **reset** it from Settings → Users → Password column → **Reset** (or by clearing the `passwordHash` and `passwordSalt` cells in the Sheet). The next time they sign in, the Confirm Password field reappears — the admin never sees or sets the new one.
-5. **Remember my password on this device** — a toggle on the login screen. Turn it on and both the **username and password** are saved in this browser's `localStorage`, so the login screen shows up already filled in (including after **Log Out** or a [session timeout](#settings-admins-only)). Leave it off on any shared or public computer.
+4. **Change Password** — once signed in, anyone can change their own password from the profile menu (click the avatar → **Change Password**). It asks for the current password, then the new one twice, and saves it to the Sheet.
+5. **Forgot password?** — a link under the password field on the login screen. The user enters their username and their own **vTiger access key** (from *My Preferences* in vTiger) to prove the account is theirs, then sets a new password. Wrong access keys count toward the same 5-attempt lockout as wrong passwords.
+6. An **Admin** can still **reset** someone's password from Settings → Users → Password column → **Reset** (or by clearing the `passwordHash` and `passwordSalt` cells in the Sheet). The next time they sign in, the Confirm Password field reappears — the admin never sees or sets the new one.
+7. **Remember my password on this device** — a toggle on the login screen. Turn it on and both the **username and password** are saved in this browser's `localStorage`, so the login screen shows up already filled in (including after **Log Out** or a [session timeout](#settings-admins-only)). Leave it off on any shared or public computer.
+
+### Password rules
+
+Every new password (first sign-in, Change Password, Forgot password) must have:
+
+- at least **8 characters**, with an **uppercase letter**, a **lowercase letter**, a **number** and a **special character**;
+- **no character repeated 3+ times in a row** (`111`, `aaa`);
+- **no 3+ sequential characters**, up or down, digits or letters (`123`, `987`, `abc`, `CBA`);
+- and it can't be **any of the user's last 3 passwords** (the current one included). An Admin reset keeps this history, so a reset can't be used to go back to an old password.
+
+The password fields show these rules as a live checklist. The Apps Script enforces them again on the server, so they can't be bypassed from the browser. Passwords set before these rules existed keep working until they're next changed.
 
 Passwords are stored in the Sheet only as **salted, peppered, iterated HMAC-SHA256 hashes**. The pepper lives in the Apps Script's Script Properties, not in the Sheet, so even someone who gets a copy of the Sheet can't check password guesses offline.
 
@@ -87,9 +100,10 @@ Browser (js/app.js) ──POST {action, username, password | token}──▶ App
 | `role` | `admin` or `member` (Team Member) |
 | `accessKey` | That user's vTiger access key |
 | `passwordHash`, `passwordSalt` | Written by the script. Clear both to reset a password |
+| `passwordHistory` | Written by the script: hashes of the last 3 passwords, used to block reuse. Don't edit |
 | `updatedAt` | Last time the script changed the row |
 
-Columns can be reordered, but the header names must stay exactly as above.
+Columns can be reordered, but the header names must stay exactly as above. If an older Users tab doesn't have `passwordHistory` yet, the script adds it automatically.
 
 ### Updating the script later
 
@@ -141,6 +155,7 @@ Also inside **Settings**, Admins manage the people who can sign in. The table re
 - **Add / Update User** adds a new user, or overwrites an existing user's name, access key, and role. It never sets their password (see [Passwords](#passwords-set-at-first-sign-in) above). When updating an existing user you can leave Access Key blank to keep their current key.
 - Each row also has its own **Role** dropdown for quickly promoting/demoting someone, and a **Show/Hide** toggle to reveal an access key when you need to check it.
 - The **Password** column shows **Not set** (they'll create one at their next sign-in) or **Set**, with a **Reset** button to put them through that first-sign-in flow again.
+- Users can also change or reset their own password without an Admin (see [Passwords](#passwords-set-at-first-sign-in)).
 - **Remove** asks for confirmation. You can't remove your own account, so there's always at least one Admin who can sign in.
 - First/last name is used only for display. If left blank, the username is shown instead.
 - Anyone who tries to log in with a username *not* on this list is rejected with "Username not found."
