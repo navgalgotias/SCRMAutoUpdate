@@ -270,7 +270,7 @@
   // Shared CRM connection config (admin-configurable via Settings).
   // `timeoutMinutes` is the idle-logout window; 0 disables it (never auto sign out).
   const DEFAULT_CRM_CONFIG = {
-    url: "https://qaaltasupportcrm.altametrics.com/",
+    url: "https://scrm.altametrics.com/",
     module: "HelpDesk",
     idField: "ticket_no",
     timeoutMinutes: 30,
